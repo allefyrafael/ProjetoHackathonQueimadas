@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="utf-8">
+  <title>Visualização de Pegadas de Incêndio - América do Sul (NASA FIRMS)</title>
+  
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      font-family: Arial, sans-serif;
+    }
+    
+    #map {
+      height: 100%;
+      width: 100%;
+    }
+    
+    .info-panel {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: white;
+      padding: 15px;
+      border-radius: 5px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+      z-index: 1000;
+      max-width: 300px;
+    }
+    
+    .info-panel h2 {
+      margin: 0 0 10px 0;
+      font-size: 18px;
+      color: #333;
+    }
+    
+    .info-panel p {
+      margin: 5px 0;
+      font-size: 12px;
+      color: #666;
+    }
+    
+    .file-input-container {
+      margin-top: 10px;
+    }
+    
+    .file-input-container input[type="file"] {
+      font-size: 12px;
+      width: 100%;
+    }
+    
+    .error-message {
+      background: #ffebee;
+      color: #c62828;
+      padding: 10px;
+      border-radius: 5px;
+      margin-top: 10px;
+      display: none;
+      font-size: 12px;
+    }
+    
+    .success-message {
+      background: #e8f5e9;
+      color: #2e7d32;
+      padding: 10px;
+      border-radius: 5px;
+      margin-top: 10px;
+      display: none;
+      font-size: 12px;
+    }
+    
+    .loading {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 3px solid #f3f3f3;
+      border-top: 3px solid #3498db;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-left: 10px;
+    }
+    
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="info-panel">
+    <h2>🔥 Pegadas de Incêndio - América do Sul</h2>
+    <p><strong>Fonte:</strong> NASA FIRMS</p>
+    <p><strong>Arquivo:</strong> <span id="fileName">fire_footprints_south_america.kml</span></p>
+    <p><em>Dados de detecção de incêndios por satélite</em></p>
+    <p style="font-size: 11px; color: #4caf50; margin-top: 5px;">
+      ✓ Usando Leaflet (sem necessidade de chave de API)
+    </p>
+    <div class="file-input-container">
+      <input type="file" id="kmlFileInput" accept=".kml" />
+      <p style="font-size: 11px; color: #999; margin-top: 5px;">Ou selecione outro arquivo KML</p>
+    </div>
+    <div class="error-message" id="errorMessage"></div>
+    <div class="success-message" id="successMessage"></div>
+  </div>
+  
+  <div id="map"></div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- toGeoJSON para converter KML -->
+  <script src="https://unpkg.com/@mapbox/togeojson@0.16.0/togeojson.js"></script>
+  <!-- DOMParser para XML (KML) -->
+  <script>
+    let map;
+    let kmlLayer = null;
+
+    function initMap() {
+      // Criar mapa centralizado na América do Sul
+      map = L.map('map').setView([-15.0, -60.0], 4);
+
+      // Adicionar camada de tiles do OpenStreetMap
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors',
+        maxZoom: 19
+      }).addTo(map);
+
+      // Tentar carregar o arquivo KML padrão da raiz do projeto
+      loadKMLFile('./fire_footprints_south_america.kml');
+
+      // Listener para seleção de arquivo
+      document.getElementById('kmlFileInput').addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = function(e) {
+            const kmlContent = e.target.result;
+            loadKMLFromContent(kmlContent);
+            document.getElementById('fileName').textContent = file.name;
+          };
+          reader.readAsText(file);
+        }
+      });
+    }
+
+    function loadKMLFile(url) {
+      console.log('Carregando arquivo KML:', url);
+      fetch(url)
+        .then(response => {
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+          return response.text();
+        })
+        .then(kmlText => {
+          console.log('Arquivo KML carregado com sucesso!');
+          loadKMLFromContent(kmlText);
+        })
+        .catch(error => {
+          console.error('Erro ao carregar KML:', error);
+          showError('Erro ao carregar o arquivo fire_footprints_south_america.kml: ' + error.message + 
+                   '. Certifique-se de que o arquivo está na raiz do projeto e que está usando um servidor HTTP (não file://).');
+        });
+    }
+
+    function loadKMLFromContent(kmlText) {
+      try {
+        // Verificar se o conteúdo está vazio
+        if (!kmlText || kmlText.trim().length === 0) {
+          throw new Error('Arquivo KML está vazio ou não foi carregado corretamente');
+        }
+        
+        // Verificar se começa com XML válido
+        const trimmedText = kmlText.trim();
+        if (!trimmedText.startsWith('<') && !trimmedText.startsWith('<?xml')) {
+          // Pode ser um arquivo comprimido (KMZ) ou binário
+          throw new Error('Arquivo não é um KML válido. Pode ser um arquivo KMZ comprimido. Execute o script Python novamente para descomprimir.');
+        }
+        
+        // Remover layer anterior se existir
+        if (kmlLayer) {
+          map.removeLayer(kmlLayer);
+        }
+
+        // Parse do KML
+        const parser = new DOMParser();
+        const kml = parser.parseFromString(kmlText, 'text/xml');
+        
+        // Verificar erros de parsing
+        const parseError = kml.querySelector('parsererror');
+        if (parseError) {
+          const errorText = parseError.textContent || parseError.innerText || 'Erro desconhecido';
+          throw new Error('Erro ao fazer parse do XML: ' + errorText);
+        }
+        
+        // Converter KML para GeoJSON
+        const geojson = toGeoJSON.kml(kml);
+        
+        // Adicionar ao mapa
+        kmlLayer = L.geoJSON(geojson, {
+          style: function(feature) {
+            // Estilizar as pegadas de incêndio
+            return {
+              color: '#ff6b35',
+              weight: 2,
+              opacity: 0.8,
+              fillColor: '#ff6b35',
+              fillOpacity: 0.3
+            };
+          },
+          onEachFeature: function(feature, layer) {
+            // Adicionar popup com informações
+            if (feature.properties) {
+              let popupContent = '<div style="max-width: 300px;">';
+              for (let key in feature.properties) {
+                if (feature.properties[key] && key !== 'description') {
+                  popupContent += `<strong>${key}:</strong> ${feature.properties[key]}<br>`;
+                }
+              }
+              if (feature.properties.description) {
+                popupContent += feature.properties.description;
+              }
+              popupContent += '</div>';
+              layer.bindPopup(popupContent);
+            }
+          },
+          pointToLayer: function(feature, latlng) {
+            // Estilizar pontos de incêndio
+            return L.circleMarker(latlng, {
+              radius: 6,
+              fillColor: '#ff6b35',
+              color: '#fff',
+              weight: 2,
+              opacity: 1,
+              fillOpacity: 0.8
+            });
+          }
+        }).addTo(map);
+
+        // Ajustar zoom para mostrar todos os dados
+        if (kmlLayer.getBounds().isValid()) {
+          map.fitBounds(kmlLayer.getBounds(), { padding: [50, 50] });
+        }
+
+        showSuccess('✓ Arquivo KML carregado com sucesso!');
+      } catch (error) {
+        showError('Erro ao processar o arquivo KML: ' + error.message);
+        console.error(error);
+      }
+    }
+
+    function showError(message) {
+      const errorDiv = document.getElementById('errorMessage');
+      const successDiv = document.getElementById('successMessage');
+      errorDiv.textContent = message;
+      errorDiv.style.display = 'block';
+      successDiv.style.display = 'none';
+    }
+
+    function showSuccess(message) {
+      const errorDiv = document.getElementById('errorMessage');
+      const successDiv = document.getElementById('successMessage');
+      successDiv.textContent = message;
+      successDiv.style.display = 'block';
+      errorDiv.style.display = 'none';
+      setTimeout(() => {
+        successDiv.style.display = 'none';
+      }, 3000);
+    }
+
+    // Inicializar mapa quando a página carregar
+    window.addEventListener('DOMContentLoaded', initMap);
+  </script>
+</body>
+</html>
+
